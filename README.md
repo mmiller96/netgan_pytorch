@@ -3,4 +3,6 @@ Pytorch implementation of the method proposed in the paper:
 [NetGAN: Generating Graphs via Random Walks](https://arxiv.org/abs/1803.00816)  
 based on the tensorflow implementation:
 https://github.com/danielzuegner/netgan
-[Generator.pdf](https://github.com/mmiller96/netgan_pytorch/files/4581595/Generator.pdf)
+Generator model:  
+![Generator](https://user-images.githubusercontent.com/17961647/81081996-f14ff380-8ef2-11ea-9468-0fa8db110bf7.png)
+Discriminator model:
