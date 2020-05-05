@@ -4,5 +4,5 @@ Pytorch implementation of the method proposed in the paper:
 based on the tensorflow implementation:
 https://github.com/danielzuegner/netgan
 Generator model:  
-![Generator](https://user-images.githubusercontent.com/17961647/81081996-f14ff380-8ef2-11ea-9468-0fa8db110bf7.png)
+![Generator](https://user-images.githubusercontent.com/17961647/81085459-88b74580-8ef7-11ea-9614-368f8543a1f2.png)
 Discriminator model:
