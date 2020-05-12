@@ -4,20 +4,21 @@ import utils
 import numpy as np
 import scipy.sparse as sp
 from sklearn.metrics import roc_auc_score, average_precision_score
+import math
 
 import torch
 import torch.optim as optim
 from torch.nn.functional import one_hot
 from torch.autograd import grad
-from torch.utils.tensorboard import SummaryWriter
+#from torch.utils.tensorboard import SummaryWriter
 import time
 from joblib import Parallel, delayed
 import pdb
+from matplotlib import pyplot as plt
 
 class Trainer():
     def __init__(self, graph,  N, max_iterations=20000, rw_len=16, batch_size=128, H_gen=40, H_disc=30, H_inp=128, z_dim=16, lr=0.0003, n_critic=3, gp_weight=10.0, betas=(.5, .9),
-                 l2_penalty_disc=5e-5, l2_penalty_gen=1e-7, temp_start=5.0, temp_decay=1-5e-5, min_temp=0.5, create_graph_every=500, num_samples_graph=10000, val_share=0.1, test_share=0.05, seed=498164,
-                 stopping_criterion='val', max_patience=5, stopping_eo=0.5, n_jobs=-1):
+                 l2_penalty_disc=5e-5, l2_penalty_gen=1e-7, temp_start=5.0, temp_decay=1-5e-5, min_temp=0.5,  val_share=0.1, test_share=0.05, seed=498164):
         """
             Initialize NetGAN.
             Parameters
@@ -59,29 +60,13 @@ class Trainer():
                         current_temp := max(temperature_decay*current_temp, min_temperature)
             min_temp: float, default: 0.5
                                       The minimal temperature for the Gumbel softmax.
-            create_graph_every: int, default: 500
-                                Creates every nth iteration a graph from randomwalks.
-            num_samples_graph: int, default 10000
-                                Number of random walks that will be created for the graphs. Higher values mean more precise evaluations but also more computational time.
             val_share: float, default: 0.1
                        Percentage of validation edges.
             test_share: float, default: 0.1
                         Percentage of test edges.
             seed: int, default: 498164
                                 Seed for numpy.random. It is used for splitting the graph in train, validation and test sets.
-            stopping_criterion: str, default: 'val'
-                                The stopping_criterion can be either 'val' or 'eo':
-                                'val': Stops the optimization if there are no improvements after several iterations. --> defined by max_patience
-                                'eo': Stops if the edge overlap exceeds a certain treshold. --> defined by stopping_eo
-            max_patience: int, default: 5
-                          Maximum evaluation steps without improvement of the validation accuracy to tolerate. Only
-                          applies to the VAL criterion.
-            stopping_eo: float in (0,1], default: 0.5
-                         Stops when the edge overlap exceeds this threshold. Will be used when stopping_criterion is 'eo'.
-            n_jobs: int, default=-1:
-                    Number of processors that will be used parallel to generate random walks to create a graph. The parallelization speeds up the time a graph is created.
-            use_tensorboard: bool, default=False
-                            If True lossfunctions will be plotted in tensorboard and can be viewed in \run
+
 
         """
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -100,9 +85,11 @@ class Trainer():
         self.temp_start = temp_start
         self.temp_decay = temp_decay
         self.min_temp = min_temp
-        self.create_graph_every = create_graph_every
-        self.num_samples_graph = num_samples_graph
+
         self.graph = graph
+        #self.train_ones, self.val_ones, self.val_zeros, self.test_ones, self.test_zeros = stuff[0], stuff[1], stuff[2], stuff[3], stuff[4]
+        #self.train_graph = stuff[5]
+        #self.walker = stuff[6]
         self.train_ones, self.val_ones, self.val_zeros, self.test_ones, self.test_zeros = utils.train_val_test_split_adjacency(graph, val_share, test_share, seed, undirected=True, connected=True, asserts=True)
         self.train_graph = sp.coo_matrix((np.ones(len(self.train_ones)), (self.train_ones[:, 0], self.train_ones[:, 1]))).tocsr()
         assert (self.train_graph.toarray() == self.train_graph.toarray().T).all()
@@ -112,17 +99,13 @@ class Trainer():
         self.generator_loss = []
         self.avp = []
         self.roc_auc = []
-        self.stopping_criterion = stopping_criterion
-        self.stopping_eo = stopping_eo      #   needed for 'eo' criterion
-        self.best_performance = 0.0         #
-        self.max_patience = max_patience    #   needed for 'val' criterion
-        self.patience = max_patience        #
+        self.best_performance = 0.0
         self.running = True
-        self.n_jobs = n_jobs
 
 
     def l2_regularization_G(self, G):
         # regularizaation for the generator. W_down will not be regularized.
+        l2_1 = torch.sum(torch.cat([x.view(-1) for x in G.W_down.weight]) ** 2 / 2)
         l2_2 = torch.sum(torch.cat([x.view(-1) for x in G.W_up.weight]) ** 2 / 2)
         l2_3 = torch.sum(torch.cat([x.view(-1) for x in G.W_up.bias]) ** 2 / 2)
         l2_4 = torch.sum(torch.cat([x.view(-1) for x in G.intermediate.weight]) ** 2 / 2)
@@ -133,16 +116,17 @@ class Trainer():
         l2_9 = torch.sum(torch.cat([x.view(-1) for x in G.c_up.bias]) ** 2 / 2)
         l2_10 = torch.sum(torch.cat([x.view(-1) for x in G.lstmcell.cell.weight]) ** 2 / 2)
         l2_11 = torch.sum(torch.cat([x.view(-1) for x in G.lstmcell.cell.bias]) ** 2 / 2)
-        l2 = self.l2_penalty_gen * (l2_2 + l2_3 + l2_4 + l2_5 + l2_6 + l2_7 + l2_8 + l2_9 + l2_10 + l2_11)
+        l2 = self.l2_penalty_gen * (l2_1 + l2_2 + l2_3 + l2_4 + l2_5 + l2_6 + l2_7 + l2_8 + l2_9 + l2_10 + l2_11)
         return l2
 
     def l2_regularization_D(self, D):
         # regularizaation for the discriminator. W_down will not be regularized.
+        l2_1 = torch.sum(torch.cat([x.view(-1) for x in D.W_down.weight]) ** 2 / 2)
         l2_2 = torch.sum(torch.cat([x.view(-1) for x in D.lstmcell.cell.weight]) ** 2 / 2)
         l2_3 = torch.sum(torch.cat([x.view(-1) for x in D.lstmcell.cell.bias]) ** 2 / 2)
         l2_4 = torch.sum(torch.cat([x.view(-1) for x in D.lin_out.weight]) ** 2 / 2)
         l2_5 = torch.sum(torch.cat([x.view(-1) for x in D.lin_out.bias]) ** 2 / 2)
-        l2 = self.l2_penalty_disc * (l2_2 + l2_3 + l2_4 + l2_5)
+        l2 = self.l2_penalty_disc * (l2_1 + l2_2 + l2_3 + l2_4 + l2_5)
         return l2
 
     def calc_gp(self, fake_inputs, real_inputs):
@@ -185,11 +169,18 @@ class Trainer():
         self.G_optimizer.step()
         return gen_cost.item()
 
-    def create_graph(self, num_samples, i):
+    def create_graph(self, num_samples, i, reset_weights=False):
+        if reset_weights:
+            self.generator.reset_weights()
         self.generator.eval()
-        self.generator.cpu()
 
-        samples = np.vstack(Parallel(n_jobs=self.n_jobs)(delayed(self.generator.sample_discrete)(int(num_samples/10), 'cpu') for i in range(10)))
+        self.generator.temp = 0.5
+        samples = []
+        num_iterations = int(num_samples/1000)+1
+        for j in range(num_iterations):
+            if(j%10 == 1): print(j)
+            samples.append(self.generator.sample_discrete(int(num_samples/1000), self.device))
+        samples = np.vstack(samples)
         gr = utils.score_matrix_from_random_walks(samples, self.N)
         gr = gr.tocsr()
 
@@ -203,13 +194,9 @@ class Trainer():
         self.roc_auc.append(roc_auc_score(actual_labels_val, edge_scores))
         self.avp.append(average_precision_score(actual_labels_val, edge_scores))
         self.eo.append(edge_overlap/self.graph.sum())
-        self.writer.add_scalar('eo_score', self.eo[-1], i)
-        self.writer.add_scalar('roc_score', self.roc_auc[-1], i)
-        self.writer.add_scalar('avp_score', self.avp[-1], i)
 
         print('roc: {:.4f}   avp: {:.4f}   eo: {:.4f}'.format(self.roc_auc[-1], self.avp[-1], self.eo[-1]))
         self.generator.temp = np.maximum(self.temp_start * np.exp(-(1 - self.temp_decay) * i), self.min_temp)
-        self.generator.to(self.device)
 
 
     def check_running(self, i):
@@ -227,22 +214,55 @@ class Trainer():
                 print('finished after {} iterations'.format(i))
                 self.running = False
 
-    def train(self):
-        if(self.stopping_criterion=='val'): print("**** Using VAL criterion for early stopping ****")
-        else: print("**** Using EO criterion of {} for early stopping".format(self.stopping_eo))
-        starting_time = time.time()
-        self.writer = SummaryWriter()           # see the lossfunctions directly in tensorboard, can be viewed in folder \run
+    def initialize_validation_settings(self, stopping_criterion, stopping_eo, max_patience):
+        self.stopping_criterion = stopping_criterion
+        self.stopping_eo = stopping_eo  # needed for 'eo' criterion         #
+        self.max_patience = max_patience  # needed for 'val' criterion
+        self.patience = max_patience  #
+        if (self.stopping_criterion == 'val'):
+            print("**** Using VAL criterion for early stopping with max patience of: {}****".format(self.max_patience))
+        else:
+            assert self.stopping_eo is not None, "stopping_eo is not a float"
+            print("**** Using EO criterion of {} for early stopping".format(self.stopping_eo))
 
+    def plot_graph(self):
+        if len(self.critic_loss) > 10:
+            plt.plot(self.critic_loss[9::], label="Critic loss")
+            plt.plot(self.generator_loss[9::], label="Generator loss")
+        else:
+            plt.plot(self.critic_loss, label="Critic loss")
+            plt.plot(self.generator_loss, label="Generator loss")
+        plt.legend()
+        plt.show()
+
+    def train(self, create_graph_every = 2000, plot_graph_every=500, num_samples_graph = 100000, stopping_criterion='val', max_patience=5, stopping_eo=None):
+        """
+        create_graph_every: int, default: 2000
+                            Creates every nth iteration a graph from randomwalks.
+        plot_graph_every: int, default: 2000
+                         Plots the lost functions of the generator and discriminator.
+        num_samples_graph: int, default 10000
+                            Number of random walks that will be created for the graphs. Higher values mean more precise evaluations but also more computational time.
+        stopping_criterion: str, default: 'val'
+                            The stopping_criterion can be either 'val' or 'eo':
+                            'val': Stops the optimization if there are no improvements after several iterations. --> defined by max_patience
+                            'eo': Stops if the edge overlap exceeds a certain treshold. --> defined by stopping_eo
+        max_patience: int, default: 5
+                      Maximum evaluation steps without improvement of the validation accuracy to tolerate. Only
+                      applies to the VAL criterion.
+        stopping_eo: float in (0,1], default: 0.5
+                     Stops when the edge overlap exceeds this threshold. Will be used when stopping_criterion is 'eo'.
+        """
+        self.initialize_validation_settings(stopping_criterion, stopping_eo, max_patience)
+        starting_time = time.time()
         # Start Training
         for i in range(self.max_iterations):
             if(self.running):
                 self.critic_loss.append(np.mean([self.critic_train_iteration() for _ in range(self.n_critic)]))
                 self.generator_loss.append(self.generator_train_iteration())
-                print('iteration: {}      critic: {:.6f}      gen {:.6f}'.format(i, self.critic_loss[-1], self.generator_loss[-1]))
-                self.writer.add_scalar('critic_loss', self.critic_loss[-1], i)
-                self.writer.add_scalar('generator_loss', self.generator_loss[-1], i)
-                if (i % self.create_graph_every == 0):
-                    self.create_graph(self.num_samples_graph,  i)
+                if(i%10 ==1): print('iteration: {}      critic: {:.6f}      gen {:.6f}'.format(i, self.critic_loss[-1], self.generator_loss[-1]))
+                if (i % create_graph_every == create_graph_every-1):
+                    self.create_graph(num_samples_graph,  i)
                     self.check_running(i)
-                    print('Took {} seconds so far..'.format(time.time() - starting_time))
-                self.writer.close()
+                    print('Took {} minutes so far..'.format((time.time() - starting_time)/60))
+                if plot_graph_every > 0 and (i + 1) % plot_graph_every == 0: self.plot_graph()

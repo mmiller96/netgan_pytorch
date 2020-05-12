@@ -62,7 +62,7 @@ class Generator(nn.Module):
     def sample_discrete(self, num_samples, device):
         with torch.no_grad():
             proba = self.sample(num_samples, device)
-        return np.argmax(proba.numpy(), axis=2)
+        return np.argmax(proba.cpu().numpy(), axis=2)
 
     def sample_gumbel(self, logits, eps=1e-20):
         U = torch.rand(logits.shape, dtype=torch.float64)
@@ -74,13 +74,29 @@ class Generator(nn.Module):
         y = logits + gumbel
         y = torch.nn.functional.softmax(y / temperature, dim=1)
         if hard:
-            y_hard = torch.max(y, 1, keepdim=True)[0].eq(y).type(torch.FloatTensor).to(device)
+            y_hard = torch.max(y, 1, keepdim=True)[0].eq(y).type(torch.float64).to(device)
             y = (y_hard - y).detach() + y
         return y
 
     def init_hidden(self, batch_size):
         weight = next(self.parameters()).data
         return weight.new(batch_size, self.H_inputs).zero_().type(torch.float64)
+
+    #def reset_weights(self):
+    #    import h5py
+    #    weights = h5py.File(r'C:\Users\Data Miner\PycharmProjects\Master_Projekt4\weights.h5', 'r')
+    #    self.intermediate.weight = torch.nn.Parameter(torch.tensor(np.array(weights.get('intermediate')).T).type(torch.float64))
+    #    self.intermediate.bias = torch.nn.Parameter(torch.tensor(np.array(weights.get('intermediate_bias'))).type(torch.float64))
+    #    self.c_up.weight = torch.nn.Parameter(torch.tensor(np.array(weights.get('c')).T).type(torch.float64))
+    #    self.c_up.bias = torch.nn.Parameter(torch.tensor(np.array(weights.get('c_bias'))).type(torch.float64))
+    #    self.h_up.weight = torch.nn.Parameter(torch.tensor(np.array(weights.get('h')).T).type(torch.float64))
+    #    self.h_up.bias = torch.nn.Parameter(torch.tensor(np.array(weights.get('h_bias'))).type(torch.float64))
+    #    self.lstmcell.cell.weight = torch.nn.Parameter(torch.tensor(np.array(weights.get('generator_lstm')).T).type(torch.float64))
+    #    self.lstmcell.cell.bias = torch.nn.Parameter(torch.tensor(np.array(weights.get('generator_lstm_bias'))).type(torch.float64))
+    #    self.W_up.weight = torch.nn.Parameter(torch.tensor(np.array(weights.get('W_up_generator')).T).type(torch.float64))
+    #    self.W_up.bias = torch.nn.Parameter(torch.tensor(np.array(weights.get('W_up_generator_bias'))).type(torch.float64))
+    #    self.W_down.weight = torch.nn.Parameter(torch.tensor(np.array(weights.get('W_down_generator')).T).type(torch.float64))
+
 
 class Discriminator(nn.Module):
     def __init__(self, H_inputs, H, N, rw_len):
@@ -121,6 +137,14 @@ class Discriminator(nn.Module):
         weight = next(self.parameters()).data
         return (weight.new(num_samples, self.H).zero_().contiguous().type(torch.float64), weight.new(num_samples, self.H).zero_().contiguous().type(torch.float64))
 
+    #def reset_weights(self):
+    #    import h5py
+    #    weights = h5py.File(r'C:\Users\Data Miner\PycharmProjects\Master_Projekt4\weights.h5', 'r')
+    #    self.W_down.weight = torch.nn.Parameter(torch.tensor(np.array(weights.get('W_down_discriminator')).T).type(torch.float64))
+    #    self.lin_out.weight = torch.nn.Parameter(torch.tensor(np.array(weights.get('discriminator_out')).T).type(torch.float64))
+    #    self.lin_out.bias = torch.nn.Parameter(torch.tensor(np.array(weights.get('discriminator_out_bias'))).type(torch.float64))
+    #    self.lstmcell.cell.weight = torch.nn.Parameter(torch.tensor(np.array(weights.get('discriminator_lstm')).T).type(torch.float64))
+    #    self.lstmcell.cell.bias = torch.nn.Parameter(torch.tensor(np.array(weights.get('discriminator_lstm_bias'))).type(torch.float64))
 
 class LSTMCell(nn.Module):
     def __init__(self, input_size, hidden_size):
