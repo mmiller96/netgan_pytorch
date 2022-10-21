@@ -18,7 +18,7 @@ from matplotlib import pyplot as plt
 
 class Trainer():
     def __init__(self, graph,  N, max_iterations=20000, rw_len=16, batch_size=128, H_gen=40, H_disc=30, H_inp=128, z_dim=16, lr=0.0003, n_critic=3, gp_weight=10.0, betas=(.5, .9),
-                 l2_penalty_disc=5e-5, l2_penalty_gen=1e-7, temp_start=5.0, temp_decay=1-5e-5, min_temp=0.5,  val_share=0.1, test_share=0.05, seed=498164):
+                 l2_penalty_disc=5e-5, l2_penalty_gen=1e-7, temp_start=5.0, temp_decay=1-5e-5, min_temp=0.5,  val_share=0.1, test_share=0.05, seed=498164, set_ops=False):
         """
             Initialize NetGAN.
             Parameters
@@ -90,7 +90,7 @@ class Trainer():
         #self.train_ones, self.val_ones, self.val_zeros, self.test_ones, self.test_zeros = stuff[0], stuff[1], stuff[2], stuff[3], stuff[4]
         #self.train_graph = stuff[5]
         #self.walker = stuff[6]
-        self.train_ones, self.val_ones, self.val_zeros, self.test_ones, self.test_zeros = utils.train_val_test_split_adjacency(graph, val_share, test_share, seed, undirected=True, connected=True, asserts=True)
+        self.train_ones, self.val_ones, self.val_zeros, self.test_ones, self.test_zeros = utils.train_val_test_split_adjacency(graph, val_share, test_share, seed, undirected=True, connected=True, asserts=True, set_ops=set_ops)
         self.train_graph = sp.coo_matrix((np.ones(len(self.train_ones)), (self.train_ones[:, 0], self.train_ones[:, 1]))).tocsr()
         assert (self.train_graph.toarray() == self.train_graph.toarray().T).all()
         self.walker = utils.RandomWalker(self.train_graph, rw_len, p=1, q=1, batch_size=batch_size)
@@ -198,6 +198,17 @@ class Trainer():
         print('roc: {:.4f}   avp: {:.4f}   eo: {:.4f}'.format(self.roc_auc[-1], self.avp[-1], self.eo[-1]))
         self.generator.temp = np.maximum(self.temp_start * np.exp(-(1 - self.temp_decay) * i), self.min_temp)
 
+    def create_transition_matrix(self, num_samples):        # should be multiples of 1000
+        self.generator.eval()
+        samples = []
+        num_iterations = int(num_samples/1000)+1
+        for j in range(num_iterations):
+            if(j%10 == 1): print(j)
+            samples.append(self.generator.sample_discrete(int(num_samples/1000), self.device))
+        samples = np.vstack(samples)
+        gr = utils.score_matrix_from_random_walks(samples, self.N)
+        gr = gr.tocsr()
+        return gr
 
     def check_running(self, i):
         if (self.stopping_criterion == 'val'):

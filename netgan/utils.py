@@ -5,10 +5,8 @@ from scipy.sparse.csgraph import connected_components, minimum_spanning_tree
 import warnings
 import pandas as pd
 from matplotlib import pyplot as plt
-#import igraph
-#import powerlaw
-from numba import jit
 import pdb
+from numba import jit
 
 def load_npz(file_name):
     """Load a SparseGraph from a Numpy binary file.
