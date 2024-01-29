@@ -169,17 +169,18 @@ class Trainer():
         self.G_optimizer.step()
         return gen_cost.item()
 
-    def create_graph(self, num_samples, i, reset_weights=False):
+    def create_graph(self, num_samples, i, batch_size=1000, reset_weights=False):
         if reset_weights:
             self.generator.reset_weights()
         self.generator.eval()
 
         self.generator.temp = 0.5
         samples = []
-        num_iterations = int(num_samples/1000)+1
+        num_iterations = int(num_samples/batch_size)
+        print("Number iterations: " + str(num_iterations))
         for j in range(num_iterations):
             if(j%10 == 1): print(j)
-            samples.append(self.generator.sample_discrete(int(num_samples/1000), self.device))
+            samples.append(self.generator.sample_discrete(batch_size, self.device))
         samples = np.vstack(samples)
         gr = utils.score_matrix_from_random_walks(samples, self.N)
         gr = gr.tocsr()
